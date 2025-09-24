@@ -1,0 +1,362 @@
+options(scipen=999)
+library(stats)
+library(DMwR2)
+library(pspearman)
+library(spatstat)
+library(dplyr)
+library(fields)
+#################### 
+###資料設定### 
+x=rep(1:20,20) 
+y=rep(1:20,each=20)
+N=400
+pp=ppn=data.frame()
+
+####資料匯入---實際資料模擬####
+load("C:/Users/TKU/OneDrive/Desktop/new.fs1.rdata")
+
+new.fs1$num=ceiling((new.fs1$gx+10^-5)/25)+floor(new.fs1$gy/25)*20
+spiece=unique(new.fs1$sp)
+happenrate=data.frame()
+
+for (i in 1:length(spiece)) {
+  try=new.fs1 %>% filter(sp==spiece[i]) 
+  happenrate[i,1]=spiece[i]
+  happenrate[i,2]=length(unique(try$num))/400
+}
+site400=list()
+for (i in 1:length(spiece)) {
+  site400[i]=new.fs1 %>% filter(sp==spiece[i]) %>% select(num) %>% distinct() %>% arrange(num) %>% as.list() 
+}
+names(site400) <- spiece
+
+############ 
+###建立所需function### 
+###Spearman函數###
+spearm = function(Xi, Yi,tail="two") {
+  n=length(Xi)
+  di=rank(Xi)-rank(Yi)
+  di.square=sum(di^2)
+  rho=1-(6*di.square/(n*(n^2-1)))
+  
+  if(n<=10){
+    p <- if (di.square > (n^3 - n)/6) {pspearman(di.square, n, lower.tail = FALSE, 
+                                                 approximation ="exact") }else {pspearman(di.square, n, lower.tail = TRUE, 
+                                                                                          approximation ="exact")}
+    
+    if(tail=="two"){
+      pvalue=min(2 * p, 1)
+    }
+    if(tail=="greater"){
+      pvalue=pspearman(di.square, n, lower.tail = FALSE, 
+                       approximation ="exact")
+    }
+    if(tail=="less"){
+      pvalue=pspearman(di.square, n, lower.tail = TRUE, 
+                       approximation ="exact")
+    }
+    
+    t=00
+  }else{
+    ##t檢定
+    t = rho * sqrt((n-2)/(1-rho^2))
+    pvaluerr = (1 - pt(rho / sqrt((1 - rho ^ 2) / (n - 2)), df = n - 2))##單右尾
+    pvaluell = pt(rho / sqrt((1 - rho ^ 2) / (n - 2)), df = n - 2)##單左尾
+    
+    
+    if (tail == "two") {
+      pvalue=min(min(pvaluerr,pvaluell)*2,1)
+    }##雙尾
+    if (tail == "greater") {
+      pvalue = pvaluerr 
+    }
+    if (tail == "less") {
+      pvalue = pvaluell 
+    }
+  }
+  
+  
+  RVAL = list(
+    "N" = n,
+    "rho" = rho,
+    "S" = di.square,
+    "statisticT" = t,
+    "Pvalue" = pvalue
+  )
+  RVAL
+}
+
+
+###Veech函數### 
+veech=function(N,N1,N2,j){ 
+  return(choose(N1,j)*choose(N-N1,N2-j)/choose(N,N2)) 
+} 
+
+###Kendall###
+kendall <- function(Xi, Yi, tail="two"){
+  kend <- data.frame(Xi = Xi,Yi = Yi,
+                     rankXi = rank(Xi),rankYi = rank(Yi))
+  n=length(Yi)
+  for (i in 1:n) {
+    kend$con[i] <-sum((Xi[min(n,(i+1)):n]<Xi[i])*(Yi[min(n,(i+1)):n]<Yi[i]))+
+      sum((Xi[min(n,(i+1)):n]>Xi[i])*(Yi[min(n,(i+1)):n]>Yi[i]))
+    kend$dis[i] <-sum((Xi[min(n,(i+1)):n]>Xi[i])*(Yi[min(n,(i+1)):n]<Yi[i]))+
+      sum((Xi[min(n,(i+1)):n]<Xi[i])*(Yi[min(n,(i+1)):n]>Yi[i]))
+  }
+  
+  ti=sum(duplicated(Xi))+1
+  uj=sum(duplicated(Yi))+1
+  n0=choose(n,2)
+  n1=sum(ti*(ti-1)/2)
+  n2=sum(uj*(uj-1)/2)
+  taub=(sum(kend$con)-sum(kend$dis))/sqrt((n0-n1)*(n0-n2))
+  rho=taub
+  v0=n*(n-1)*(2*n+5)
+  vt=ti*(ti-1)*(2*ti+5)
+  vu=uj*(uj-1)*(2*uj+5)
+  v1=(ti*(ti-1)*uj*(uj-1))/(2*n*(n-1))
+  v2=(ti*(ti-1)*(ti-2)*uj*(uj-1)*(uj-2))/(9*n*(n-1)*(n-2))
+  v=(v0-vt-vu)/(18+v1+v2)
+  
+  z=(sum(kend$con)-sum(kend$dis))/sqrt(v)
+  if(tail=="two"){
+    if(rho>0) {p <- pnorm(z,lower.tail = F)} else {p <- pnorm(z,lower.tail = T)}
+    pvalue=min(p*2,1)
+  }
+  if(tail=="greater"){
+    pvalue=(1-pnorm(z))
+  }
+  if(tail=="less"){
+    pvalue=pnorm(z)
+  }
+  RVAL = list(
+    "N" = n,
+    "rho" = rho,
+    "statisticZ" = z,
+    "Pvalue" = pvalue
+  )
+  RVAL
+}
+
+
+###sum of Veech Pj### 
+Pj=function(p,n1,n2){ 
+  j.int=max(n1+n2-N,0) 
+  j.end=min(n1,n2) 
+  
+  iisite <- j.end 
+  boxsite <- j.end 
+  N=400 
+  
+  if (j.int>0){ 
+    box <- data.frame(pj=rep(0,j.int-1),sumpj=rep(0,j.int-1)) 
+    for (ii in seq(j.int,j.end,1)) { 
+      box[ii, 1] = veech(400, n1, n2, ii)  
+      box[1, 2] = box[1, 1] 
+    } 
+    for (ii in seq(2,j.end,1)) { 
+      box[ii, 2] = round(box[ii, 1] + box[ii - 1, 2],5) 
+    } 
+    box = rbind(data.frame(pj=0,sumpj=0),box) 
+  }else{ 
+    box <- data.frame() 
+    for (ii in 1:iisite) { 
+      box[ii, 1] = veech(400, n1, n2, ii - 1) 
+      box[1, 2] = box[1, 1] 
+    } 
+    for (ii in 2:iisite) { 
+      box[ii, 2] = round(box[ii, 1] + box[ii - 1, 2],5) 
+    } 
+  } 
+  box 
+} 
+
+
+###期望值與實際個數### 
+OOEE <- function(n1,n2,N,M1,M2){ 
+  ##########格子點個數期望值########## 
+  E1 <- (n1 * n2) / N          #同時出現兩種物種 
+  E2 <- ((N - n1) * (N - n2)) / N  #兩個物種都沒出現
+  E3 <- (n1 * (N - n2)) / N      #species1出現，species2沒出現 
+  E4 <- ((N - n1) * n2) / N      #species1沒出現，species2出現 
+  EE = matrix(c(E1, E2, E3, E4)) 
+  
+  ##########實際觀測到的格子點個數(O1-O4)########## 
+  O1 <- sum(M1 * M2) 
+  O2 <- sum((1 - M1) * (1 - M2)) 
+  O3 <- sum(M1 * (1 - M2)) 
+  O4 <- sum((1 - M1) * M2) 
+  OO = matrix(c(O1, O2, O3, O4))
+  
+  out = list(E1=E1,E2=E2,E3=E3,E4=E4,EE=EE,O1=O1,O2=O2,O3=O3,O4=O4,OO=OO) 
+  out 
+} 
+
+###拒絕H0 負相關### 
+npower=function(OE,N){ 
+  ####binomial#### 
+  #####p1##### 
+  p1 = pbinom((OE$O1), N, OE$E1 / N, lower.tail = TRUE, log.p = FALSE) 
+  
+  #####p2##### 
+  p22 = pbinom((OE$O2), N, OE$E2 / N, lower.tail = TRUE, log.p = FALSE) 
+  p2 = p1 * p22 
+  p = list(p1,p2) 
+  return(p) 
+} 
+
+###拒絕H0 正相關### 
+ppower=function(OE,N){ 
+  ####binomial#### 
+  #####p1##### 
+  p1 = 1 - pbinom(q = (OE$O1 - 1),N,OE$E1 / N,lower.tail = TRUE,log.p = FALSE)#右尾 
+  #####p2##### 
+  p22 = 1 - pbinom((OE$O2 - 1), N, OE$E2 / N, lower.tail = TRUE, log.p = FALSE) 
+  p2 = p1 * p22#右尾 
+  p = list(p1,p2) 
+  return(p) 
+}
+
+
+
+###獨立### 
+indep=function(s_a,s_b){ 
+#s_a=site400$CALLTI;s_b=site400$WENDFO
+  p_a=length(s_a)/400
+  p_b=length(s_b)/400
+
+  species_a <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("A",400))) 
+  species_b <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("B",400))) 
+ 
+  species_a$site[s_a]=1 
+  species_b$site[s_b]=1     
+    
+  A=species_a[which(species_a$site==1),] 
+  B=species_b[which(species_b$site==1),] 
+  M1=matrix(species_a$site,20,20) 
+  M2=matrix(species_b$site,20,20) 
+  M3=M1*M2
+  num_m3=sum(M3==1)
+
+  D1=ppp(x=A$x,y=A$y,mark=A$mark,window=owin(c(0.5,20.5),c(0.5,20.5))) 
+  KA=density.ppp(D1,sigma=1,eps=1)
+  fA=KA$v 
+    
+  D2=ppp(x=B$x,y=B$y,mark=B$mark,window=owin(c(0.5,20.5),c(0.5,20.5)))   
+  KB=density.ppp(D2,sigma=1,eps=1)     
+  fB=KB$v 
+  
+  pi1 = fA / sum(fA)
+  pi2 = fB / sum(fB)
+  pA=mean(pi1[which(M3==1)])
+  pB=mean(pi2[which(M3==1)])  
+  
+  r=sum((pi1[which(M3==1)]-pA)*(pi2[M3==1]-pB)) / (sqrt(sum((pi1[M3==1]-pA)^2))*sqrt(sum((pi2[M3==1]-pB)^2))) 
+  if (sum(M3==1)>2){
+    rr=r
+    t=rr*sqrt((sum(M3==1)-2)/(1-rr^2)) 
+    pv=1-pt(t,sum(M3==1)-2) 
+    pvv=pt(t,sum(M3==1)-2) 
+    
+    s.right=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "greater")$p.value
+    k.right=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "greater")$p.value
+    s.two= cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "two.sided")$p.value
+    k.two=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "two.sided")$p.value
+    s.left= cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "less")$p.value
+    k.left=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "less")$p.value
+    spearrho=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "greater")$estimate
+    kenrho=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "greater")$estimate
+    }else{
+      rr=0
+      pv=1
+      pvv=1
+      
+      s.right=1
+      k.right=1
+      s.left=1
+      k.left=1
+      s.two=1
+      k.two=1
+      spearrho=0
+      kenrho=0
+    }
+    
+    n1 <- sum(M1) 
+    n2 <- sum(M2) 
+    OE <- OOEE(n1,n2,N,M1,M2) 
+    ####veech#### 
+    p=min(p_a,p_b)
+    box=Pj(p,n1,n2) 
+    pvbn=box[OE$O1+1, 2]  #型一誤差 
+    pvb=ifelse(OE$O1==0,1,1 - box[OE$O1, 2]) 
+    veech.left=pvbn
+    veech.right=pvb
+    veech.two=min(pvb,pvbn)
+    pp=rbind(pp,ppower(OE,N))
+    ppn=rbind(ppn,npower(OE,N))
+  
+  bin.two=min(pp[,2],ppn[,2]) 
+  bin.right=pp[,2]
+  bin.left=ppn[,2]
+  tt=pv 
+  nt=pvv
+  t.left=pv
+  t.right=pvv
+  
+  print(c("物種A發生率" = p_a, 
+          "物種B發生率" = p_b,
+          "Binomal右尾" = round(bin.right,4),
+          "Veech右尾"=round(veech.right,4),
+          "spearman右尾"=round(s.right,4),
+          "kendall右尾"=round(k.right,4),
+          "T test右尾"=round(t.left,4),
+          "Binomal左尾" = round(bin.left,4), 
+          "Veech左尾"=round(veech.left,4),
+          "spearman左尾"=round(s.left,4),
+          "kendall左尾"=round(k.left,4),
+          "T test左尾"=round(t.right,4),
+          "Binomal雙尾" = round(bin.two,4),
+          "Veech雙尾"=round(veech.two,4), 
+          "spearman雙尾"=round(s.two,4),
+          "kendall雙尾"=round(k.two,4),
+          "T test雙尾"=round(min(tt,nt),4)
+  )) 
+  
+}  
+
+loop=list()  
+loop[[1]] <- c(site400$CALLTI)
+loop[[2]] <- c(site400$WENDFO)
+loop[[3]] <- c(site400$MICHCO)
+loop[[4]] <- c(site400$MAESPE)
+loop[[5]] <- c(site400$DAPHGL)
+loop[[6]] <- c(site400$CINNSU)
+loop[[7]] <- c(site400$SYMPGL)
+loop[[8]] <- c(site400$ELAEJA)
+
+final=data.frame()
+for (i in 1:7) {
+  for (j in (i+1):8) {
+    final=rbind(final,t(indep(loop[[i]],loop[[j]])))
+  }
+}
+View(final)
+
+string=c('CALLTI','WENDFO','MICHCO','MAESPE','DAPHGL','CINNSU','SYMPGL','ELAEJA')
+string[1]
+tmp=data.frame()
+for (i in 1:7) {
+  for (j in (i+1):8) {
+    tmp=rbind(tmp,data.frame(spiece1=c(string[i]),spiece2=c(string[j]) ) )
+  }
+}
+final=cbind(tmp,final)
+#write_xlsx(final,"物種結果.xlsx")
+
+####其他 查看物種分布####
+happenrate %>% filter(between(happenrate$V2,0.7,0.8))
+
+xydata <-data.frame("num" = 1:400,"x" = rep(1:20, 20),"y" = rep(1:20, each = 20),"site1" = 0,mask = as.factor((rep("A",400))))
+xydata$site1[site400$TRICDU]=1
+image(matrix(xydata$site1,20,20))+title(main="TRICDU0.7775")
+

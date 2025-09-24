@@ -1,0 +1,514 @@
+options(scipen=999)
+library(stats)
+library(DMwR2)
+library(pspearman)
+library(spatstat)
+library(dplyr)
+library(fields)
+#################### 
+###資料設定### 
+x=rep(1:20,20) 
+y=rep(1:20,each=20) 
+
+pv=pv2=pvz=pvv=pvv2=numeric(500)  
+rr=r2=t=t2=rz=numeric(500) 
+k.right=s.right=numeric(500)
+k.two=s.two=numeric(500)
+k.left=s.left=numeric(500)
+kenrho=spearrho=numeric(500)
+num_m3=num_m4=numeric()
+N=400 
+ncount = data.frame() 
+npoint = data.frame() 
+name1p = list(NULL, c('p')) 
+pvb=pvbn = matrix(0, 500, 1, dimnames = name1p) 
+
+############ 
+###建立所需function### 
+###Spearman函數###
+spearm = function(Xi, Yi,tail="two") {
+  n=length(Xi)
+  di=rank(Xi)-rank(Yi)
+  di.square=sum(di^2)
+  rho=1-(6*di.square/(n*(n^2-1)))
+  
+  if(n<=10){
+    p <- if (di.square > (n^3 - n)/6) {pspearman(di.square, n, lower.tail = FALSE, 
+                                                 approximation ="exact") }else {pspearman(di.square, n, lower.tail = TRUE, 
+                                                                                          approximation ="exact")}
+    
+    if(tail=="two"){
+      pvalue=min(2 * p, 1)
+    }
+    if(tail=="greater"){
+      pvalue=pspearman(di.square, n, lower.tail = FALSE, 
+                       approximation ="exact")
+    }
+    if(tail=="less"){
+      pvalue=pspearman(di.square, n, lower.tail = TRUE, 
+                       approximation ="exact")
+    }
+    
+    t=00
+  }else{
+    ##t檢定
+    t = rho * sqrt((n-2)/(1-rho^2))
+    pvaluerr = (1 - pt(rho / sqrt((1 - rho ^ 2) / (n - 2)), df = n - 2))##單右尾
+    pvaluell = pt(rho / sqrt((1 - rho ^ 2) / (n - 2)), df = n - 2)##單左尾
+    
+    
+    if (tail == "two") {
+      pvalue=min(min(pvaluerr,pvaluell)*2,1)
+    }##雙尾
+    if (tail == "greater") {
+      pvalue = pvaluerr 
+    }
+    if (tail == "less") {
+      pvalue = pvaluell 
+    }
+  }
+  
+  
+  RVAL = list(
+    "N" = n,
+    "rho" = rho,
+    "S" = di.square,
+    "statisticT" = t,
+    "Pvalue" = pvalue
+  )
+  RVAL
+}
+
+
+###Veech函數### 
+veech=function(N,N1,N2,j){ 
+  return(choose(N1,j)*choose(N-N1,N2-j)/choose(N,N2)) 
+} 
+
+###Kendall###
+kendall <- function(Xi, Yi, tail="two"){
+  kend <- data.frame(Xi = Xi,Yi = Yi,
+                     rankXi = rank(Xi),rankYi = rank(Yi))
+  n=length(Yi)
+  for (i in 1:n) {
+    kend$con[i] <-sum((Xi[min(n,(i+1)):n]<Xi[i])*(Yi[min(n,(i+1)):n]<Yi[i]))+
+      sum((Xi[min(n,(i+1)):n]>Xi[i])*(Yi[min(n,(i+1)):n]>Yi[i]))
+    kend$dis[i] <-sum((Xi[min(n,(i+1)):n]>Xi[i])*(Yi[min(n,(i+1)):n]<Yi[i]))+
+      sum((Xi[min(n,(i+1)):n]<Xi[i])*(Yi[min(n,(i+1)):n]>Yi[i]))
+  }
+  
+  ti=sum(duplicated(Xi))+1
+  uj=sum(duplicated(Yi))+1
+  n0=choose(n,2)
+  n1=sum(ti*(ti-1)/2)
+  n2=sum(uj*(uj-1)/2)
+  taub=(sum(kend$con)-sum(kend$dis))/sqrt((n0-n1)*(n0-n2))
+  rho=taub
+  v0=n*(n-1)*(2*n+5)
+  vt=ti*(ti-1)*(2*ti+5)
+  vu=uj*(uj-1)*(2*uj+5)
+  v1=(ti*(ti-1)*uj*(uj-1))/(2*n*(n-1))
+  v2=(ti*(ti-1)*(ti-2)*uj*(uj-1)*(uj-2))/(9*n*(n-1)*(n-2))
+  v=(v0-vt-vu)/(18+v1+v2)
+  
+  z=(sum(kend$con)-sum(kend$dis))/sqrt(v)
+  if(tail=="two"){
+    if(rho>0) {p <- pnorm(z,lower.tail = F)} else {p <- pnorm(z,lower.tail = T)}
+    pvalue=min(p*2,1)
+  }
+  if(tail=="greater"){
+    pvalue=(1-pnorm(z))
+  }
+  if(tail=="less"){
+    pvalue=pnorm(z)
+  }
+  RVAL = list(
+    "N" = n,
+    "rho" = rho,
+    "statisticZ" = z,
+    "Pvalue" = pvalue
+  )
+  RVAL
+}
+
+
+###sum of Veech Pj### 
+Pj=function(p,n1,n2){ 
+  j.int=max(n1+n2-N,0) 
+  j.end=min(n1,n2) 
+  
+  iisite <- j.end 
+  boxsite <- j.end 
+  N=400 
+  
+  if (j.int>0){ 
+    box <- data.frame(pj=rep(0,j.int-1),sumpj=rep(0,j.int-1)) 
+    for (ii in seq(j.int,j.end,1)) { 
+      box[ii, 1] = veech(400, n1, n2, ii)  
+      box[1, 2] = box[1, 1] 
+    } 
+    for (ii in seq(2,j.end,1)) { 
+      box[ii, 2] = round(box[ii, 1] + box[ii - 1, 2],5) 
+    } 
+    box = rbind(data.frame(pj=0,sumpj=0),box) 
+  }else{ 
+    box <- data.frame() 
+    for (ii in 1:iisite) { 
+      box[ii, 1] = veech(400, n1, n2, ii - 1) 
+      box[1, 2] = box[1, 1] 
+    } 
+    for (ii in 2:iisite) { 
+      box[ii, 2] = round(box[ii, 1] + box[ii - 1, 2],5) 
+    } 
+  } 
+  box 
+} 
+
+
+###期望值與實際個數### 
+OOEE <- function(n1,n2,N,M1,M2){ 
+  ##########格子點個數期望值########## 
+  E1 <- (n1 * n2) / N          #同時出現兩種物種 
+  E2 <- ((N - n1) * (N - n2)) / N  #兩個物種都沒出現
+  E3 <- (n1 * (N - n2)) / N      #species1出現，species2沒出現 
+  E4 <- ((N - n1) * n2) / N      #species1沒出現，species2出現 
+  EE = matrix(c(E1, E2, E3, E4)) 
+  
+  ##########實際觀測到的格子點個數(O1-O4)########## 
+  O1 <- sum(M1 * M2) 
+  O2 <- sum((1 - M1) * (1 - M2)) 
+  O3 <- sum(M1 * (1 - M2)) 
+  O4 <- sum((1 - M1) * M2) 
+  OO = matrix(c(O1, O2, O3, O4))
+  
+  out = list(E1=E1,E2=E2,E3=E3,E4=E4,EE=EE,O1=O1,O2=O2,O3=O3,O4=O4,OO=OO) 
+  out 
+} 
+
+###拒絕H0 負相關### 
+npower=function(OE,N){ 
+  ####binomial#### 
+  #####p1##### 
+  p1 = pbinom((OE$O1), N, OE$E1 / N, lower.tail = TRUE, log.p = FALSE) 
+  
+  #####p2##### 
+  p22 = pbinom((OE$O2), N, OE$E2 / N, lower.tail = TRUE, log.p = FALSE) 
+  p2 = p1 * p22 
+  p = list(p1,p2) 
+  return(p) 
+} 
+
+###拒絕H0 正相關### 
+ppower=function(OE,N){ 
+  ####binomial#### 
+  #####p1##### 
+  p1 = 1 - pbinom(q = (OE$O1 - 1),N,OE$E1 / N,lower.tail = TRUE,log.p = FALSE)#右尾 
+  #####p2##### 
+  p22 = 1 - pbinom((OE$O2 - 1), N, OE$E2 / N, lower.tail = TRUE, log.p = FALSE) 
+  p2 = p1 * p22#右尾 
+  p = list(p1,p2) 
+  return(p) 
+}
+
+
+
+###獨立### 
+indep=function(p_a,p_b){ 
+  #p_a=0.1;p_b=0.3;i=1
+  n_b=400*p_b
+  n_a=400*p_a
+  pp=ppn=NULL 
+  for (i in 1:500){ 
+    species_a <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("A",400))) 
+    species_b <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("B",400))) 
+    set.seed(i) 
+    place_a <- sample(400,n_a,prob=rep(1/400,400)) 
+    set.seed(i+500) 
+    place_b <- sample(400,n_b,prob=rep(1/400,400)) 
+    species_a$site[place_a]=1 
+    species_b$site[place_b]=1     
+    
+    A=species_a[which(species_a$site==1),] 
+    B=species_b[which(species_b$site==1),] 
+    M1=matrix(species_a$site,20,20) 
+    M2=matrix(species_b$site,20,20) 
+    M3=M1*M2
+    num_m3[i]=sum(M3==1)
+    
+    D1=ppp(x=A$x,y=A$y,mark=A$mark,window=owin(c(0.5,20.5),c(0.5,20.5))) 
+    KA=density.ppp(D1,sigma=1,eps=1)
+    fA=KA$v 
+    
+    D2=ppp(x=B$x,y=B$y,mark=B$mark,window=owin(c(0.5,20.5),c(0.5,20.5)))   
+    KB=density.ppp(D2,sigma=1,eps=1)     
+    fB=KB$v 
+    
+    pi1 = fA / sum(fA)
+    pi2 = fB / sum(fB)
+    pA=mean(pi1[which(M3==1)])
+    pB=mean(pi2[which(M3==1)])  
+    
+    r=sum((pi1[which(M3==1)]-pA)*(pi2[M3==1]-pB)) / (sqrt(sum((pi1[M3==1]-pA)^2))*sqrt(sum((pi2[M3==1]-pB)^2))) 
+    if (sum(M3==1)>2){
+      rr[i]=r
+      t[i]=rr[i]*sqrt((sum(M3==1)-2)/(1-rr[i]^2)) 
+      pv[i]=1-pt(t[i],sum(M3==1)-2) 
+      pvv[i]=pt(t[i],sum(M3==1)-2) 
+      
+      s.right[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "greater")$p.value
+      k.right[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "greater")$p.value
+      s.two[i]= cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "two.sided")$p.value
+      k.two[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "two.sided")$p.value
+      s.left[i]= cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "less")$p.value
+      k.left[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "less")$p.value
+      spearrho[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "greater")$estimate
+      kenrho[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "greater")$estimate
+    }else{
+      rr[i]=0
+      pv[i]=1
+      pvv[i]=1
+      
+      s.right[i]=1
+      k.right[i]=1
+      s.left[i]=1
+      k.left[i]=1
+      s.two[i]=1
+      k.two[i]=1
+      spearrho[i]=0
+      kenrho[i]=0
+    }
+    
+    n1 <- sum(M1) 
+    n2 <- sum(M2) 
+    OE <- OOEE(n1,n2,N,M1,M2) 
+    ####veech#### 
+    box=Pj(p,n1,n2) 
+    pvbn[i, ] =box[OE$O1+1, 2]  #型一誤差 
+    pvb[i,]=ifelse(OE$O1==0,1,1 - box[OE$O1, 2]) 
+    veech.left=(sum(pvbn<=0.05))/500
+    veech.right=sum(pvb<=0.05)/500
+    veech.two=(sum(pvb<=0.025)+sum(pvbn<=0.025))/500 
+    pp=rbind(pp,ppower(OE,N))
+    ppn=rbind(ppn,npower(OE,N))
+  } 
+  
+  bin.two=(sum(pp[,2]<=0.025)+sum(ppn[,2]<=0.025))/500 
+  bin.right=sum(pp[,2]<=0.05)/500 
+  bin.left=sum(ppn[,2]<=0.05)/500
+  tt=sum(pv<=0.025) 
+  nt=sum(pvv<=0.025)
+  t.left=sum(pv<=0.05)
+  t.right=sum(pvv<=0.05)
+
+  
+  
+  mr=mean(rr) 
+  sdr=sd(rr) 
+  
+  print(c("occur rate" = p_b, 
+          "Binomal右尾" = bin.right,
+          "Binomal左尾" = bin.left, 
+          "Binomal雙尾" = bin.two,
+          "Veech右尾"=veech.right,
+          "Veech左尾"=veech.left,
+          "Veech雙尾"=veech.two, 
+          "spearman右尾"=mean(s.right<=0.05),
+          "spearman左尾"=mean(s.left<=0.05),
+          "spearman雙尾"=mean(s.two<=0.025),
+          "kendall右尾"=mean(k.right<=0.05),
+          "kendall左尾"=mean(k.left<=0.05),
+          "kendall雙尾"=mean(k.two<=0.025),
+          "T test右尾"=t.left/500,
+          "T test左尾"=t.right/500,
+          "T test雙尾"=(tt+nt)/500, 
+          "平均交集個數"=mean(num_m3),
+          "mean r"=mr, 
+          "sd r"=sdr
+  )) 
+  
+}  
+indep(0.1,0.3)
+#sapply(c(0.3,0.5,0.7),function(x){indep(x)}) 
+
+
+
+
+#################### 
+###正相關### 
+pos=function(p_a,p_b){
+  #p=0.1;i=0.1
+  n_a=400*p_a
+  n_b=400*p_b
+  
+  pp=NULL 
+  for (i in 1:500){ 
+    species_a <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("A",400))) 
+    species_b <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("B",400))) 
+    set.seed(i) 
+    place_a <- sample(400,n_a,prob=x) 
+    set.seed(i+500) 
+    place_b <- sample(400,n_b,prob=x) 
+    
+    species_a$site[place_a]=1 
+    species_b$site[place_b]=1
+    A=species_a[which(species_a$site==1),] 
+    B=species_b[which(species_b$site==1),] 
+    M1=matrix(species_a$site,20,20) 
+    M2=matrix(species_b$site,20,20) 
+    M3=M1*M2
+    num_m3[i]=sum(M3==1)
+    
+    ###T-test### 
+    D1=ppp(x=A$x,y=A$y,mark=A$mark,window=owin(c(0.5,20.5),c(0.5,20.5))) 
+    KA=density.ppp(D1,sigma=1,eps=1)     
+    fA=KA$v 
+    D2=ppp(x=B$x,y=B$y,mark=B$mark,window=owin(c(0.5,20.5),c(0.5,20.5)))   
+    KB=density.ppp(D2,sigma=1,eps=1)     
+    fB=KB$v 
+    
+    pi1 = fA / sum(fA)
+    pi2 = fB / sum(fB)	
+    pA=mean(pi1[which(M3==1)])
+    pB=mean(pi2[which(M3==1)]) 
+    
+    r=sum((pi1[M3==1]-pA)*(pi2[M3==1]-pB)) / (sqrt(sum((pi1[M3==1]-pA)^2))*sqrt(sum((pi2[M3==1]-pB)^2)))
+    if (sum(M3==1)>2){
+      rr[i]=r
+      t[i]=rr[i]*sqrt((sum(M3==1)-2)/(1-rr[i]^2)) 
+      pv[i]=1-pt(t[i],sum(M3==1)-2) 
+      s.right[i]= cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "greater")$p.value
+      k.right[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "greater")$p.value
+      spearrho[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "greater")$estimate
+      kenrho[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "greater")$estimate
+      
+    }else{
+      rr[i]=0
+      pv[i]=1
+      pvv[i]=1
+      
+      s.right[i]=1
+      k.right[i]=1
+      spearrho[i]=0
+      kenrho[i]=0
+    }
+    
+    
+    n1 <- sum(M1) 
+    n2 <- sum(M2)
+    OE <- OOEE(n1,n2,N,M1,M2) 
+    ####veech#### 
+    box=Pj(p,n1,n2) 
+    #pvb[i, ] =box[OE$O1+1, 2]  #型一誤差 
+    pvb[i,]=ifelse(OE$O1==0,1,1 - box[OE$O1, 2]) 
+    ppb=sum(pvb<=0.05)/500 
+    pp=rbind(pp,ppower(OE,N)) 
+  } 
+  bin.right=sum(pp[,2]<=0.05)/500 
+  t.right=sum(pv<=0.05)/500 
+  
+  mr=mean(rr) 
+  sdr=sd(rr) 
+  print(c("occur rate" = p_b, 
+          "BinP2" = bin.right, 
+          "VeechP"=ppb, 
+          "spearman右尾"=mean(s.right<=0.05),
+          "kendall右尾"=mean(k.right<=0.05),
+          "T test"=t.right, 
+          "平均交集個數"=mean(num_m3),
+          "mean r"=mr, 
+          "sd r"=sdr
+  )) 
+}  
+pos(0.1,0.3)
+
+
+#################### 
+###負相關### 
+neg=function(p_a,p_b){     
+  n_a=400*p_a
+  n_b=400*p_b
+  pp=NULL 
+  for (i in 1:500){ 
+    species_a <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("A",400))) 
+    species_b <- data.frame(x,y,"site"=rep(0,400),mark=as.factor(rep("B",400))) 
+    set.seed(i) 
+    place_a <- sample(400,n_a,prob=x) 
+    sort1=c(1:400)[-place_a] 
+    set.seed(i+500) 
+    place_b <- sample(400,n_b,prob=41-x-y) 
+    sort2=c(1:400)[-place_b] 
+    species_a$site[place_a]=1 
+    species_b$site[place_b]=1     
+    
+    A=species_a[which(species_a$site==1),] 
+    B=species_b[which(species_b$site==1),] 
+    M1=matrix(species_a$site,20,20) 
+    M2=matrix(species_b$site,20,20) 
+    M3=M1*M2
+    num_m3[i]=sum(M3==1)
+    
+    
+    ###T-test### 
+    D1=ppp(x=A$x,y=A$y,mark=A$mark,window=owin(c(0.5,20.5),c(0.5,20.5))) 
+    KA=density.ppp(D1,sigma=1,eps=1)     
+    fA=KA$v 
+    D2=ppp(x=B$x,y=B$y,mark=B$mark,window=owin(c(0.5,20.5),c(0.5,20.5)))   
+    KB=density.ppp(D2,sigma=1,eps=1)     
+    fB=KB$v 
+    
+    pi1 = fA / sum(fA)
+    pi2 = fB / sum(fB)	
+    pA=mean(pi1[which(M3==1)])
+    pB=mean(pi2[which(M3==1)]) 
+    
+    r=sum((pi1[M3==1]-pA)*(pi2[M3==1]-pB)) / (sqrt(sum((pi1[M3==1]-pA)^2))*sqrt(sum((pi2[M3==1]-pB)^2)))
+    if (sum(M3==1)>2){
+      rr[i]=r
+      t[i]=rr[i]*sqrt((sum(M3==1)-2)/(1-rr[i]^2)) 
+      pv[i]=pt(t[i],sum(M3==1)-2)
+      
+      s.right[i]= cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "less")$p.value
+      k.right[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "less")$p.value
+      spearrho[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "spearm", alternative = "less")$estimate
+      kenrho[i]=cor.test(pi1[which(M3==1)] ,pi2[which(M3==1)] ,method = "kendall", alternative = "less")$estimate
+      
+    }else{
+      rr[i]=0
+      pv[i]=1
+      pvv[i]=1
+      
+      s.right[i]=1
+      k.right[i]=1
+      spearrho[i]=0
+      kenrho[i]=0
+    }
+    
+    n1 <- sum(M1) 
+    n2 <- sum(M2) 
+    OE <- OOEE(n1,n2,N,M1,M2) 
+    ####veech#### 
+    box=Pj(p,n1,n2) 
+    pvb[i, ] =box[OE$O1+1, 2]  #型一誤差 
+    #pvb[i,]=ifelse(OE$O1==0,1,1 - box[OE$O1, 2]) 
+    ppb=sum(pvb<=0.05)/500 
+    pp=rbind(pp,npower(OE,N)) 
+  } 
+  bin.left=sum(pp[,2]<=0.05)/500 
+  t.left=sum(pv<=0.05)/500 
+  mr=mean(rr) 
+  sdr=sd(rr) 
+  mra=mean(r2)
+  sdra=sd(r2)
+  print(c("occur rate" = p_b, 
+          "BinP2" = bin.left, 
+          "VeechP"=ppb,
+          "spearman左尾"=mean(s.right<=0.05),
+          "kendall左尾"=mean(k.right<=0.05),
+          "T test"=t.left, 
+          "平均交集個數"=mean(num_m3),
+          "mean r"=mr, 
+          "sd r"=sdr
+  ))
+  
+}  
+neg(0.1,0.3)
